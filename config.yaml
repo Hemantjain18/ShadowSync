@@ -1,0 +1,65 @@
+paths:
+  raw_data_dir: "data/raw"
+  cache_dir: "data/cache"
+  tiles_dir: "data/tiles"
+  demo_assets_dir: "data/demo"
+
+georef:
+  # Target CRS: Equirectangular Moon matching LROC convention (Moon 2000 Sphere / IAU 2000:30100)
+  # Semi-major axis = 1737400.0 m
+  target_crs: "+proj=eqc +lat_ts=0 +lat_0=0 +lon_0=0 +x_0=0 +y_0=0 +R=1737400 +units=m +no_defs"
+  target_crs_name: "Moon_2000_Equirectangular"
+  resampling_method: "bilinear"
+
+tiling:
+  tile_size_px: 512
+  overlap_px: 64
+
+sensors:
+  OHRC:
+    name: "Orbiter High Resolution Camera"
+    gsd_m: 0.25
+    modality: "panchromatic"
+    incidence_angle_max_safe: 80.0
+  TMC2:
+    name: "Terrain Mapping Camera 2"
+    gsd_m: 5.0
+    modality: "panchromatic_stereo"
+    incidence_angle_max_safe: 80.0
+  IIRS:
+    name: "Imaging Infra-Red Spectrometer"
+    gsd_m: 80.0
+    modality: "hyperspectral"
+    bands_count: 256
+    default_reference_band_idx: 42
+    incidence_angle_max_safe: 80.0
+  LROC_NAC:
+    name: "Lunar Reconnaissance Orbiter Camera (NAC)"
+    gsd_m: 0.5
+    modality: "panchromatic_reference"
+
+scale_bridging:
+  pivot_sensor: "TMC2"
+  max_direct_scale_ratio: 25.0
+
+illumination:
+  clahe_clip_limit: 3.0
+  clahe_tile_grid_size: [8, 8]
+  incidence_angle_cutoff_deg: 80.0
+  high_sun_warning_deg: 85.0
+
+matching:
+  default_methods: ["SIFT", "AKAZE", "LightGlue"]
+  sift_n_features: 2000
+  akaze_threshold: 0.001
+  lightglue_extractor: "superpoint"
+
+fitting:
+  default_model: "homography" # "homography" or "affine"
+  ransac_reproj_threshold_px: 4.0
+  min_inlier_count: 8
+  min_inlier_ratio: 0.15
+
+validation:
+  max_acceptable_rmse_px: 3.5
+  lroc_cross_val_threshold_px: 5.0

@@ -1,0 +1,6 @@
+{
+  "name": "Lunar Matcher",
+  "description": "Multi-sensor lunar image registration pipeline for Chandrayaan-2 OHRC (0.25m), TMC-2 (5m), and IIRS (80m) with scale bridging, illumination normalization, and cross-validation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
