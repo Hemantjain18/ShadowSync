@@ -35,29 +35,36 @@ Raw ISSDC Products (OHRC / TMC-2 / IIRS) + Metadata (.lbl/.xml)
         │
         ▼
 [Stage 4] Modality & Band Reduction (`lunar_matcher/matching/band_select.py`)
-        - 256-band IIRS cube reduction via 1st Principal Component (PCA) or selected VNIR band
+        - 256-band IIRS cube reduction via 1st Principal Component (PCA) or selected VNIR band (Band 12 ~1000nm)
         - Solved geometric transform broadcast across all cube channels simultaneously
         │
         ▼
-[Stage 5] Pluggable Feature Benchmark (`lunar_matcher/matching/benchmark.py`)
+[Stage 5] IIRS Hyperspectral Mineralogy & Absorption Analysis (`lunar_matcher/spectral/`)
+        - Diagnostic absorption band parameters (1 µm, 1.25 µm, 2 µm, 3 µm)
+        - Continuum removal & polynomial sub-band center derivation
+        - Rule-based mineral classification (pyroxenes, olivine, anorthosite, spinel, mature mare)
+        - Band Area Ratio (BAR) calculation and thermal emission correction gating
+        │
+        ▼
+[Stage 6] Pluggable Feature Benchmark (`lunar_matcher/matching/benchmark.py`)
         - Classical detectors: SIFT, AKAZE
         - Cross-modal stub: RIFT2 (radiation-invariant feature transform)
         - Deep learning: SuperPoint + LightGlue pipeline
         - Quantitative comparative metrics: match count, mean confidence, latency
         │
         ▼
-[Stage 6] Geometric Transform & Outlier Rejection (`lunar_matcher/fitting/ransac.py`)
+[Stage 7] Geometric Transform & Outlier Rejection (`lunar_matcher/fitting/ransac.py`)
         - RANSAC Homography / Affine partial fitting with strict inlier ratio gates (> 15%)
         │
         ▼
-[Stage 7] Accuracy & Cross-Validation (`lunar_matcher/validate/rmse.py`)
+[Stage 8] Accuracy & Cross-Validation (`lunar_matcher/validate/rmse.py`)
         - Manual control-point (tie point) RMSE calculation
         - Third-party independent LROC reference cross-validation
         │
         ▼
-[Stage 8] Live Interactive Dashboard (`lunar_matcher/dashboard/` & Web UI)
+[Stage 9] Live Interactive Dashboard & Mineralogy Viewer (`lunar_matcher/dashboard/` & Web UI)
         - Interactive sensor pair comparison, live pipeline execution, overlay opacity blend,
-          confidence score indicators, and RMSE validation scorecards.
+          spectral reflectance & continuum-removed curves, mineral classification map, and validation scorecards.
 
 ---
 
@@ -152,15 +159,13 @@ npm run dev:api   # Flask on :5001
 npm run dev:web   # Vite on :3000
 ```
 
-### What's real vs. what's still simplified
-- **Real**: tile images, illumination confidence, Tier-3 gating decision + message, scale-bridging
-  strategy (`pair_planner`), the full SIFT/AKAZE/RIFT2/LightGlue(-fallback) benchmark, RANSAC fit,
-  inlier-tie-point RMSE, and independent LROC NAC cross-validation — all computed live by the Python
-  package on each "Run Registration" click.
-- **Simplified for the demo dataset**: the South Pole gating scenario reuses the normal Apollo-11 TMC-2/IIRS
-  pixel tiles with an overridden solar-angle metadata (84.5°) when no dedicated polar-shadow tile exists for
-  that sensor (only OHRC has one, `Apollo11_OHRC_POLAR_SHADOW.tif`) — the *gating computation itself* is
-  genuine, just the source pixels for those two sensors are reused rather than distinct polar captures.
-- The "Aligned Registration Overlay" panel blends the two real source tiles client-side for visual reference;
-  it does not apply the solved homography pixel-by-pixel (that would need warping in the browser or an
-  extra backend endpoint returning a warped PNG — flag if you want that added next).
+### API Endpoints
+- `GET /api/health`: Health status.
+- `GET /api/mineralogy?region=<region>`: Run diagnostic mineralogy analysis on IIRS cube without requiring image registration.
+- `GET /api/run-pipeline?region=<region>&sensorA=<sensor>&sensorB=<sensor>`: Full registration pipeline, returning tie-points, benchmark, scale bridging, validation report, and if IIRS is selected, the mineralogical classification map and spectral curves.
+
+### Real vs. Simulated Spectral Data
+- **GeoTIFF Source Tiles**: The pre-cached files in `data/tiles/` are single-band 8-bit GeoTIFFs (512×512) representing calibrated surface albedo.
+- **Simulated IIRS Cubes**: In demo mode when no real 256-band Level-2 ENVI or multi-band GeoTIFF is present in `data/raw/`, `lunar_matcher.spectral.simulate.build_simulated_cube` synthesizes a 256-channel spectral cube (800–5100 nm, 16.85 nm spacing) by modulating endmember crystal-field absorption profiles (low/high-Ca pyroxenes, olivine, plagioclase, spinel, ilmenite) with the spatial albedo.
+- **Provenance Transparency**: Every returned mineralogy payload explicitly specifies `provenance.source = "simulated"` and notes the synthetic origin.
+- **Thermal Emission Gating**: The 3 µm hydration band index is strictly gated. Since daytime lunar thermal emission overwhelms solar reflectance beyond 2.5 µm, hydration analysis returns `unavailable` unless explicit Level-2 thermal emission modeling (`provenance.thermal_corrected = True`) is confirmed.

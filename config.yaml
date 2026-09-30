@@ -31,7 +31,7 @@ sensors:
     gsd_m: 80.0
     modality: "hyperspectral"
     bands_count: 256
-    default_reference_band_idx: 42
+    default_reference_band_idx: 12 # ~1000 nm: index round((1000 - 800) / 16.85) = 12
     incidence_angle_max_safe: 80.0
   LROC_NAC:
     name: "Lunar Reconnaissance Orbiter Camera (NAC)"
@@ -63,3 +63,10 @@ fitting:
 validation:
   max_acceptable_rmse_px: 3.5
   lroc_cross_val_threshold_px: 5.0
+
+spectral:
+  wavelength_start_nm: 800.0
+  sampling_nm: 16.85
+  n_bands: 256
+  reference_library_path: "data/spectral_lib.json"
+  simulated_fallback: true

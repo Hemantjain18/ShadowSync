@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import {
   Satellite,
   Layers,
@@ -11,9 +11,11 @@ import {
   CheckCircle2,
   FileText,
   Compass,
-  Zap,
   Eye,
   Info,
+  Download,
+  Activity,
+  FileSpreadsheet,
 } from "lucide-react";
 
 interface BenchmarkRecord {
@@ -63,6 +65,53 @@ interface PivotLeg {
   fit: FitResult | null;
 }
 
+interface MineralClass {
+  id: number;
+  key: string;
+  name: string;
+  coverage_pct: number;
+  mean_band1_nm: number | null;
+  mean_band2_nm: number | null;
+  mean_depth: number;
+  confidence: number;
+  color_hex: string;
+}
+
+interface DiagnosticWindow {
+  name: string;
+  start_nm: number;
+  end_nm: number;
+  color: string;
+}
+
+interface SpectrumData {
+  wavelengths_nm: number[];
+  reflectance: number[];
+  continuum_removed: number[];
+  continuum: number[];
+}
+
+interface MineralogyReport {
+  source: "measured" | "simulated";
+  dominant_class: string;
+  dominant_coverage_pct: number;
+  classes: MineralClass[];
+  indices: {
+    band1_1um: { center_nm: number | null; depth: number; area: number; valid: boolean };
+    band2_2um: { center_nm: number | null; depth: number; area: number; valid: boolean };
+    band_area_ratio: number | null;
+    plagioclase_1250nm: { center_nm: number | null; depth: number; area: number; valid: boolean };
+    hydration_3um: { depth: number | null; center_nm: number | null; valid: boolean; status: string; reason?: string };
+  };
+  mean_spectrum: SpectrumData;
+  diagnostic_windows: DiagnosticWindow[];
+  quality: {
+    thermal_corrected: boolean | null;
+    bad_band_count: number;
+    warnings: string[];
+  };
+}
+
 interface PipelineResponse {
   region: string;
   sensorA: string;
@@ -91,6 +140,11 @@ interface PipelineResponse {
   chainLegInlierRmse?: { leg1: RmseResult | null; leg2: RmseResult | null };
   lrocValidation?: LrocResult;
   validationReport?: ValidationReport;
+  mineralogy?: MineralogyReport;
+  classMapImage?: string;
+  classMapWarped?: string;
+  legend?: Record<string, string>;
+  plainLanguageSummary?: string;
   error?: string;
 }
 
@@ -107,9 +161,10 @@ export default function App() {
   const [opacity, setOpacity] = useState(0.5);
   const [blendMode, setBlendMode] = useState<"alpha" | "difference" | "checker">("alpha");
 
-  // Client-side preview only (informational banner shown BEFORE the real
-  // pipeline runs). The authoritative decision comes back from
-  // /api/run-pipeline -> scaleBridging, computed by lunar_matcher.georef.pyramid.pair_planner.
+  // Spectral UI state
+  const [spectrumMode, setSpectrumMode] = useState<"reflectance" | "continuum_removed">("reflectance");
+  const [classMapDisplayMode, setClassMapDisplayMode] = useState<"map" | "overlay" | "warped">("map");
+
   const isPivotRequired = (sensorA === "OHRC" && sensorB === "IIRS") || (sensorA === "IIRS" && sensorB === "OHRC");
 
   const handleRunPipeline = async () => {
@@ -128,7 +183,7 @@ export default function App() {
     } catch (err: any) {
       setPipelineError(
         err?.message?.includes("Failed to fetch")
-          ? "Could not reach the pipeline backend at /api. Is `python server/app.py` running? (see README)"
+          ? "Could not reach the registration pipeline backend at /api. Please check that the server is active."
           : err?.message || "Unknown error running the pipeline."
       );
     } finally {
@@ -140,6 +195,176 @@ export default function App() {
     setPipelineRan(false);
     setPipelineData(null);
     setPipelineError(null);
+  };
+
+  const downloadJsonReport = () => {
+    if (!pipelineData?.mineralogy) return;
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(pipelineData.mineralogy, null, 2));
+    const downloadAnchor = document.createElement("a");
+    downloadAnchor.setAttribute("href", dataStr);
+    downloadAnchor.setAttribute("download", `iirs_mineralogy_${region}.json`);
+    document.body.appendChild(downloadAnchor);
+    downloadAnchor.click();
+    downloadAnchor.remove();
+  };
+
+  const downloadCsvReport = () => {
+    if (!pipelineData?.mineralogy) return;
+    const m = pipelineData.mineralogy;
+    let csv = "Mineral Class,Coverage (%),Mean Band 1 (nm),Mean Band 2 (nm),Mean Depth,Confidence (%)\n";
+    m.classes.forEach((c) => {
+      csv += `"${c.name}",${c.coverage_pct},${c.mean_band1_nm ?? "N/A"},${c.mean_band2_nm ?? "N/A"},${c.mean_depth},${(c.confidence * 100).toFixed(1)}\n`;
+    });
+    csv += "\nSpectral Index,Value,Unit/Status\n";
+    csv += `Band 1 Center,${m.indices.band1_1um.center_nm ?? "N/A"},nm\n`;
+    csv += `Band 1 Depth,${(m.indices.band1_1um.depth * 100).toFixed(2)},%\n`;
+    csv += `Band 1 Area,${m.indices.band1_1um.area},nm\n`;
+    csv += `Band 2 Center,${m.indices.band2_2um.center_nm ?? "N/A"},nm\n`;
+    csv += `Band 2 Depth,${(m.indices.band2_2um.depth * 100).toFixed(2)},%\n`;
+    csv += `Band 2 Area,${m.indices.band2_2um.area},nm\n`;
+    csv += `Band Area Ratio (BAR),${m.indices.band_area_ratio ?? "N/A"},unitless\n`;
+    csv += `1250nm Plagioclase Depth,${(m.indices.plagioclase_1250nm.depth * 100).toFixed(2)},%\n`;
+    csv += `3um Hydration Index,${m.indices.hydration_3um.depth ?? "N/A"},${m.indices.hydration_3um.status}\n`;
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `iirs_mineralogy_${region}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  // Helper to render SVG spectrum path
+  const renderSpectrumSvg = (specData: SpectrumData) => {
+    const { wavelengths_nm, reflectance, continuum_removed, continuum } = specData;
+    const wMin = 800;
+    const wMax = 3200;
+    const svgWidth = 600;
+    const svgHeight = 220;
+    const padX = 45;
+    const padY = 25;
+    const plotW = svgWidth - padX * 2;
+    const plotH = svgHeight - padY * 2;
+
+    const scaleX = (w: number) => padX + ((w - wMin) / (wMax - wMin)) * plotW;
+
+    // Y scale depends on view mode
+    let yMin = 0.0;
+    let yMax = 0.45;
+    if (spectrumMode === "continuum_removed") {
+      yMin = 0.70;
+      yMax = 1.05;
+    }
+    const scaleY = (val: number) => padY + plotH - ((val - yMin) / (yMax - yMin)) * plotH;
+
+    const toPath = (vals: number[]) => {
+      return vals
+        .map((v, i) => {
+          const x = scaleX(wavelengths_nm[i]);
+          const y = scaleY(v);
+          return `${i === 0 ? "M" : "L"} ${x.toFixed(1)} ${y.toFixed(1)}`;
+        })
+        .join(" ");
+    };
+
+    const refPath = toPath(reflectance);
+    const contPath = toPath(continuum);
+    const crPath = toPath(continuum_removed);
+
+    // Diagnostic windows for background shading
+    const windows = [
+      { name: "1 µm Mafic", start: 820, end: 1320, color: "rgba(59, 130, 246, 0.12)" },
+      { name: "1.25 µm Plag", start: 1200, end: 1350, color: "rgba(168, 85, 247, 0.12)" },
+      { name: "2 µm Pyroxene", start: 1600, end: 2400, color: "rgba(16, 185, 129, 0.12)" },
+      { name: "3 µm H₂O/OH", start: 2700, end: 3100, color: "rgba(236, 72, 153, 0.12)" },
+    ];
+
+    const xTicks = [800, 1000, 1500, 2000, 2500, 3000];
+
+    return (
+      <svg viewBox={`0 0 ${svgWidth} ${svgHeight}`} className="w-full h-auto select-none overflow-visible">
+        {/* Shaded Diagnostic Windows */}
+        {windows.map((win) => {
+          const x1 = Math.max(padX, scaleX(win.start));
+          const x2 = Math.min(padX + plotW, scaleX(win.end));
+          const w = Math.max(0, x2 - x1);
+          return (
+            <g key={win.name}>
+              <rect x={x1} y={padY} width={w} height={plotH} fill={win.color} />
+              <text x={x1 + 4} y={padY + 12} fontSize="9" fill="#94a3b8" opacity="0.8">
+                {win.name}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Grid lines */}
+        {xTicks.map((tick) => (
+          <g key={tick}>
+            <line x1={scaleX(tick)} y1={padY} x2={scaleX(tick)} y2={padY + plotH} stroke="#334155" strokeDasharray="3 3" opacity="0.5" />
+            <text x={scaleX(tick)} y={padY + plotH + 15} fontSize="10" fill="#94a3b8" textAnchor="middle">
+              {tick}
+            </text>
+          </g>
+        ))}
+
+        {/* Y-axis Ticks */}
+        {spectrumMode === "reflectance" ? (
+          [0.1, 0.2, 0.3, 0.4].map((yVal) => (
+            <g key={yVal}>
+              <line x1={padX} y1={scaleY(yVal)} x2={padX + plotW} y2={scaleY(yVal)} stroke="#334155" strokeDasharray="3 3" opacity="0.4" />
+              <text x={padX - 8} y={scaleY(yVal) + 4} fontSize="9" fill="#94a3b8" textAnchor="end">
+                {yVal.toFixed(2)}
+              </text>
+            </g>
+          ))
+        ) : (
+          [0.75, 0.85, 0.95, 1.0].map((yVal) => (
+            <g key={yVal}>
+              <line x1={padX} y1={scaleY(yVal)} x2={padX + plotW} y2={scaleY(yVal)} stroke="#334155" strokeDasharray="3 3" opacity="0.4" />
+              <text x={padX - 8} y={scaleY(yVal) + 4} fontSize="9" fill="#94a3b8" textAnchor="end">
+                {yVal.toFixed(2)}
+              </text>
+            </g>
+          ))
+        )}
+
+        {/* Axis borders */}
+        <line x1={padX} y1={padY} x2={padX} y2={padY + plotH} stroke="#475569" />
+        <line x1={padX} y1={padY + plotH} x2={padX + plotW} y2={padY + plotH} stroke="#475569" />
+
+        {/* Curves */}
+        {spectrumMode === "reflectance" ? (
+          <>
+            <path d={contPath} fill="none" stroke="#64748b" strokeWidth="1.5" strokeDasharray="4 4" />
+            <path d={refPath} fill="none" stroke="#f59e0b" strokeWidth="2.5" />
+          </>
+        ) : (
+          <>
+            <line x1={padX} y1={scaleY(1.0)} x2={padX + plotW} y2={scaleY(1.0)} stroke="#64748b" strokeDasharray="4 4" strokeWidth="1.5" />
+            <path d={crPath} fill="none" stroke="#10b981" strokeWidth="2.5" />
+          </>
+        )}
+
+        {/* Axis Labels */}
+        <text x={padX + plotW / 2} y={svgHeight - 2} fontSize="10" fill="#cbd5e1" textAnchor="middle" fontWeight="bold">
+          Wavelength λ (nm)
+        </text>
+        <text
+          x={-padY - plotH / 2}
+          y={12}
+          fontSize="10"
+          fill="#cbd5e1"
+          textAnchor="middle"
+          fontWeight="bold"
+          transform="rotate(-90)"
+        >
+          {spectrumMode === "reflectance" ? "Reflectance Factor" : "Continuum Removed (R / R_cont)"}
+        </text>
+      </svg>
+    );
   };
 
   return (
@@ -159,7 +384,7 @@ export default function App() {
                 </span>
               </div>
               <p className="text-xs text-neutral-400">
-                Multi-Sensor Registration: OHRC (0.25m) · TMC-2 (5m) · IIRS (80m) · LROC NAC Cross-Ref
+                Multi-Sensor Registration &amp; IIRS Spectral Mineralogy · OHRC (0.25m) · TMC-2 (5m) · IIRS (80m)
               </p>
             </div>
           </div>
@@ -208,9 +433,9 @@ export default function App() {
                   }}
                   className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-200 focus:outline-none focus:border-amber-500"
                 >
-                  <option value="apollo11">Apollo 11 (0.67°N, 23.47°E)</option>
-                  <option value="tycho">Tycho Crater (43.31°S, 11.36°W)</option>
-                  <option value="sinusiridum">Sinus Iridum (44.1°N, 31.5°W)</option>
+                  <option value="apollo11">Apollo 11 (0.67°N, 23.47°E) · Mare Basalt</option>
+                  <option value="tycho">Tycho Crater (43.31°S, 11.36°W) · Anorthosite / Highlands</option>
+                  <option value="sinusiridum">Sinus Iridum (44.1°N, 31.5°W) · Imbrium Mare Flow</option>
                   <option value="southpole">South Pole PSR (Gating Demo, 84.5° Sun)</option>
                 </select>
               </div>
@@ -259,12 +484,12 @@ export default function App() {
                   {isProcessing ? (
                     <>
                       <span className="h-4 w-4 border-2 border-neutral-950 border-t-transparent rounded-full animate-spin"></span>
-                      <span>Aligning...</span>
+                      <span>Processing...</span>
                     </>
                   ) : (
                     <>
                       <Play className="h-4 w-4 fill-current" />
-                      <span>Run Registration</span>
+                      <span>Run Pipeline</span>
                     </>
                   )}
                 </button>
@@ -288,7 +513,7 @@ export default function App() {
                   <span className="font-semibold text-amber-300">Scale-Bridging Pivot Activated: </span>
                   Direct matching between {sensorA} (0.25m) and {sensorB} (80m) has a <span className="font-bold text-white">320× scale disparity</span>.
                   The pipeline automatically routes through <span className="font-semibold text-amber-200">TMC-2 (5.0m)</span> as an intermediate geometric pivot:
-                  {" "}OHRC (0.25m) → TMC-2 (5m, 20×) → IIRS (80m, 16×), chaining homography transforms $H = H_{'{2}'} \cdot H_{'{1}'}$.
+                  {" "}OHRC (0.25m) → TMC-2 (5m, 20×) → IIRS (80m, 16×), chaining homography transforms $H = H_2 \cdot H_1$.
                 </div>
               </div>
             )}
@@ -302,7 +527,7 @@ export default function App() {
             </div>
           )}
 
-          {/* Real Pre-cached Tile Preview (Side by Side) — pixels come from data/tiles/, loaded by the Flask backend */}
+          {/* Pre-cached Tile Preview */}
           {pipelineData && !pipelineError && (
             <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Tile A Card */}
@@ -347,9 +572,9 @@ export default function App() {
 
           {!pipelineData && !pipelineError && (
             <div className="p-8 rounded-2xl border border-dashed border-neutral-800 text-center text-sm text-neutral-500">
-              Press <span className="text-neutral-300 font-medium">Run Registration</span> to load the real {sensorA} / {sensorB} tiles for {
+              Press <span className="text-neutral-300 font-medium">Run Pipeline</span> to load real tiles for {
                 { apollo11: "Apollo 11", tycho: "Tycho Crater", sinusiridum: "Sinus Iridum", southpole: "the South Pole gating demo" }[region]
-              } and run the actual pipeline.
+              } and evaluate multi-sensor registration &amp; IIRS spectral mineralogy.
             </div>
           )}
 
@@ -365,14 +590,14 @@ export default function App() {
                   </div>
                   <p className="text-sm text-red-300/90">{pipelineData.gateReason}</p>
                   <p className="text-xs text-neutral-400 italic">
-                    Pipeline deliberately halted prior to feature extraction (computed live by
+                    Pipeline registration halted prior to feature extraction (computed live by
                     lunar_matcher.matching.illumination.compute_illumination_confidence). Engineering safety rule:
-                    refusing registration is strictly superior to outputting a hallucinatory homography on moving terminator shadows.
+                    refusing registration on extreme grazing shadows prevents hallucinated correspondences.
                   </p>
                 </div>
               ) : (
                 <>
-                  {/* Scale-bridging strategy actually returned by pair_planner() */}
+                  {/* Scale-bridging strategy */}
                   {pipelineData.scaleBridging && (
                     <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3 text-xs text-neutral-300">
                       <Info className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
@@ -386,7 +611,7 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* Pivot chain detail, only rendered when the backend actually routed through TMC-2 */}
+                  {/* Pivot chain detail */}
                   {pipelineData.pivotChain && (
                     <div className="bg-neutral-900/80 border border-neutral-800 rounded-2xl p-5 space-y-3">
                       <h2 className="text-sm font-semibold text-white flex items-center gap-2">
@@ -413,13 +638,7 @@ export default function App() {
                     </div>
                   )}
 
-                  {!pipelineData.registrationSucceeded && pipelineData.fit && (
-                    <div className="p-4 rounded-xl bg-amber-950/30 border border-amber-800/60 text-amber-200 text-sm">
-                      Registration rejected by RANSAC gating: {pipelineData.fit.errorMessage}
-                    </div>
-                  )}
-
-                  {/* Step 1 & 2: Illumination Metrics & Benchmark Table */}
+                  {/* Feature Matcher Benchmark Table */}
                   <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                     {/* Illumination Gating Card */}
                     <div className="bg-neutral-900/80 border border-neutral-800 rounded-2xl p-5 space-y-4">
@@ -496,9 +715,6 @@ export default function App() {
                                 </td>
                               </tr>
                             ))}
-                            {(pipelineData.benchmark ?? []).length === 0 && (
-                              <tr><td colSpan={5} className="py-4 text-center text-neutral-500">No methods produced matches for this pair.</td></tr>
-                            )}
                           </tbody>
                         </table>
                       </div>
@@ -552,7 +768,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Aligned Viewer Canvas — real tile pixels, actually blended/diffed client-side */}
                     <div className="relative aspect-square w-full max-w-md mx-auto rounded-xl overflow-hidden bg-neutral-950 border border-neutral-800">
                       <img src={pipelineData.tileImageA} className="absolute inset-0 w-full h-full object-cover" alt="reference" />
                       <img
@@ -561,25 +776,16 @@ export default function App() {
                         style={{ opacity: blendMode === "alpha" ? opacity : 1, mixBlendMode: blendMode === "difference" ? "difference" : "normal" }}
                         alt="moving"
                       />
-
                       <div className="absolute top-3 left-3 bg-neutral-900/90 backdrop-blur-md px-3 py-1.5 rounded-lg border border-neutral-700 text-xs flex items-center gap-2">
                         <span className={`h-2 w-2 rounded-full ${pipelineData.registrationSucceeded ? "bg-emerald-400" : "bg-red-400"}`}></span>
                         <span className="text-neutral-200 font-medium">
                           {sensorB} {blendMode === "difference" ? "differenced against" : "blended over"} {sensorA}
                         </span>
                       </div>
-
-                      <div className="absolute bottom-3 right-3 bg-neutral-900/90 backdrop-blur-md px-2.5 py-1 rounded text-xs text-neutral-400 border border-neutral-700 font-mono">
-                        {pipelineData.fit ? `${pipelineData.fit.inlierCount} of ${pipelineData.fit.totalMatches} matches locked as inliers` : "No fit computed"}
-                      </div>
                     </div>
-                    <p className="text-[11px] text-neutral-500 text-center">
-                      Note: this is a raw pixel blend of the two source tiles for visual reference, not the RANSAC-warped
-                      output — the actual homography is in <code>pipelineData.fit</code> / <code>composedTransform</code>.
-                    </p>
                   </div>
 
-                  {/* Step 5: Accuracy & Cross-Validation Panel */}
+                  {/* Accuracy & Cross-Validation Panel */}
                   {pipelineData.validationReport && (
                     <div className="bg-neutral-900/80 border border-neutral-800 rounded-2xl p-5 space-y-4">
                       <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
@@ -638,6 +844,357 @@ export default function App() {
                   )}
                 </>
               )}
+
+              {/* ------------------------------------------------------------- */}
+              {/* Mineralogy Report Panel (IIRS) — rendered even if gated!     */}
+              {/* ------------------------------------------------------------- */}
+              {pipelineData.mineralogy && (
+                <section className="bg-neutral-900/80 border border-neutral-800 rounded-2xl p-6 space-y-6 shadow-xl animate-fadeIn">
+                  {/* Panel Header */}
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-neutral-800 pb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-700 flex items-center justify-center text-neutral-950">
+                        <Activity className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <h2 className="text-base font-bold text-white flex items-center gap-2">
+                          <span>Mineralogy Report (Chandrayaan-2 IIRS)</span>
+                        </h2>
+                        <p className="text-xs text-neutral-400">
+                          Diagnostic Crystal Field Absorption Analysis · 256 Spectral Channels (800–5100 nm)
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {/* Provenance Badge */}
+                      {pipelineData.mineralogy.source === "measured" ? (
+                        <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                          MEASURED IIRS CUBE
+                        </span>
+                      ) : (
+                        <span className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                          SIMULATED SPECTRA - demo tile has no spectral data
+                        </span>
+                      )}
+
+                      {/* Download Buttons */}
+                      <button
+                        onClick={downloadJsonReport}
+                        className="p-1.5 rounded-lg bg-neutral-800 border border-neutral-700 text-neutral-300 hover:text-white hover:bg-neutral-700 transition"
+                        title="Download Report JSON"
+                      >
+                        <Download className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={downloadCsvReport}
+                        className="p-1.5 rounded-lg bg-neutral-800 border border-neutral-700 text-neutral-300 hover:text-white hover:bg-neutral-700 transition"
+                        title="Download Data CSV"
+                      >
+                        <FileSpreadsheet className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* AI Summary Banner (if generated) */}
+                  {pipelineData.plainLanguageSummary && (
+                    <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-950/40 to-neutral-900 border border-emerald-800/50 flex items-start gap-3">
+                      <Sparkles className="h-5 w-5 text-emerald-400 shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <div className="text-xs font-bold text-emerald-300 uppercase tracking-wider">
+                          AI Geochemical Synopsis
+                        </div>
+                        <p className="text-xs text-neutral-200 leading-relaxed">
+                          {pipelineData.plainLanguageSummary}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Summary Cards Grid */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="bg-neutral-950/60 p-4 rounded-xl border border-neutral-800/80">
+                      <div className="text-xs text-neutral-400 mb-1">Dominant Mineral Lithology</div>
+                      <div className="text-base font-bold text-emerald-400 truncate" title={pipelineData.mineralogy.dominant_class}>
+                        {pipelineData.mineralogy.dominant_class}
+                      </div>
+                      <div className="text-xs text-neutral-500 mt-1">
+                        Spatial coverage: <span className="font-mono text-neutral-300 font-bold">{pipelineData.mineralogy.dominant_coverage_pct}%</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-neutral-950/60 p-4 rounded-xl border border-neutral-800/80">
+                      <div className="text-xs text-neutral-400 mb-1">1 µm Mafic Band Center</div>
+                      <div className="text-xl font-bold font-mono text-blue-400">
+                        {pipelineData.mineralogy.indices.band1_1um.center_nm?.toFixed(1) ?? "—"} nm
+                      </div>
+                      <div className="text-xs text-neutral-500 mt-1">
+                        Absorption depth: {(pipelineData.mineralogy.indices.band1_1um.depth * 100).toFixed(1)}%
+                      </div>
+                    </div>
+
+                    <div className="bg-neutral-950/60 p-4 rounded-xl border border-neutral-800/80">
+                      <div className="text-xs text-neutral-400 mb-1">2 µm Pyroxene / BAR</div>
+                      <div className="text-xl font-bold font-mono text-emerald-400">
+                        {pipelineData.mineralogy.indices.band2_2um.center_nm?.toFixed(1) ?? "—"} nm
+                      </div>
+                      <div className="text-xs text-neutral-500 mt-1">
+                        Band Area Ratio: <span className="font-mono text-neutral-300">{pipelineData.mineralogy.indices.band_area_ratio ?? "N/A"}</span>
+                      </div>
+                    </div>
+
+                    <div className="bg-neutral-950/60 p-4 rounded-xl border border-neutral-800/80">
+                      <div className="text-xs text-neutral-400 mb-1">3 µm Hydration Index</div>
+                      <div className="text-sm font-bold font-mono text-amber-400/90 pt-1">
+                        {pipelineData.mineralogy.indices.hydration_3um.depth != null
+                          ? `${(pipelineData.mineralogy.indices.hydration_3um.depth * 100).toFixed(2)}%`
+                          : "n/a - needs thermal correction"}
+                      </div>
+                      <div className="text-[11px] text-neutral-500 mt-1 truncate" title={pipelineData.mineralogy.indices.hydration_3um.reason}>
+                        Thermal model unverified
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Spectral Curve Chart & Classification Map */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+                    {/* Inline-SVG Spectrum Chart */}
+                    <div className="bg-neutral-950/60 border border-neutral-800/80 rounded-xl p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="text-xs font-bold text-neutral-200">IIRS Mean Reflectance Spectrum</h3>
+                          <p className="text-[11px] text-neutral-400">Diagnostic crystal field absorption windows shaded</p>
+                        </div>
+                        <div className="flex bg-neutral-800 p-0.5 rounded-lg border border-neutral-700 text-xs">
+                          <button
+                            onClick={() => setSpectrumMode("reflectance")}
+                            className={`px-2 py-0.5 rounded transition ${spectrumMode === "reflectance" ? "bg-neutral-700 text-white font-medium" : "text-neutral-400"}`}
+                          >
+                            Reflectance
+                          </button>
+                          <button
+                            onClick={() => setSpectrumMode("continuum_removed")}
+                            className={`px-2 py-0.5 rounded transition ${spectrumMode === "continuum_removed" ? "bg-neutral-700 text-white font-medium" : "text-neutral-400"}`}
+                          >
+                            Cont-Removed
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* SVG Spectrum Renderer */}
+                      <div className="w-full bg-neutral-950 rounded-lg p-2 border border-neutral-800/50">
+                        {renderSpectrumSvg(pipelineData.mineralogy.mean_spectrum)}
+                      </div>
+
+                      {/* Chart Legend */}
+                      <div className="flex flex-wrap items-center gap-4 text-[11px] text-neutral-400 pt-1">
+                        {spectrumMode === "reflectance" ? (
+                          <>
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-3 h-0.5 bg-amber-500"></span>
+                              <span>Mean Reflectance R(λ)</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="w-3 h-0.5 border-t border-dashed border-slate-400"></span>
+                              <span>Linear Continuum Baseline</span>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="flex items-center gap-1.5">
+                            <span className="w-3 h-0.5 bg-emerald-500"></span>
+                            <span>Continuum-Removed Ratio R / R_cont</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Thematic Mineral Map Viewer */}
+                    <div className="bg-neutral-950/60 border border-neutral-800/80 rounded-xl p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="text-xs font-bold text-neutral-200">Thematic Mineral Classification Map</h3>
+                          <p className="text-[11px] text-neutral-400">Pixel classification derived from absorption band parameters</p>
+                        </div>
+                        <div className="flex bg-neutral-800 p-0.5 rounded-lg border border-neutral-700 text-xs">
+                          <button
+                            onClick={() => setClassMapDisplayMode("map")}
+                            className={`px-2 py-0.5 rounded transition ${classMapDisplayMode === "map" ? "bg-neutral-700 text-white font-medium" : "text-neutral-400"}`}
+                          >
+                            Class Map
+                          </button>
+                          <button
+                            onClick={() => setClassMapDisplayMode("overlay")}
+                            className={`px-2 py-0.5 rounded transition ${classMapDisplayMode === "overlay" ? "bg-neutral-700 text-white font-medium" : "text-neutral-400"}`}
+                          >
+                            Overlay
+                          </button>
+                          {pipelineData.classMapWarped && (
+                            <button
+                              onClick={() => setClassMapDisplayMode("warped")}
+                              className={`px-2 py-0.5 rounded transition ${classMapDisplayMode === "warped" ? "bg-neutral-700 text-white font-medium" : "text-neutral-400"}`}
+                            >
+                              Warped
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Map Canvas */}
+                      <div className="relative aspect-square w-full max-w-sm mx-auto rounded-lg overflow-hidden bg-neutral-950 border border-neutral-800">
+                        {/* Background reference tile if in overlay or warped mode */}
+                        {(classMapDisplayMode === "overlay" || classMapDisplayMode === "warped") && (
+                          <img src={pipelineData.tileImageA} className="absolute inset-0 w-full h-full object-cover" alt="reference" />
+                        )}
+
+                        {/* Class map image */}
+                        {pipelineData.classMapImage && (
+                          <img
+                            src={classMapDisplayMode === "warped" && pipelineData.classMapWarped ? pipelineData.classMapWarped : pipelineData.classMapImage}
+                            className="absolute inset-0 w-full h-full object-cover"
+                            style={{
+                              opacity: classMapDisplayMode === "map" ? 1.0 : opacity,
+                              imageRendering: "pixelated",
+                            }}
+                            alt="mineralogy class map"
+                          />
+                        )}
+
+                        <div className="absolute top-2 left-2 bg-neutral-900/90 backdrop-blur-md px-2 py-1 rounded text-[11px] text-neutral-300 border border-neutral-700">
+                          {classMapDisplayMode === "map"
+                            ? "Raw Spectral Classes"
+                            : classMapDisplayMode === "warped"
+                            ? `Registered to ${pipelineData.sensorA} frame`
+                            : `Overlaid on ${pipelineData.sensorA} (${(opacity * 100).toFixed(0)}%)`}
+                        </div>
+                      </div>
+
+                      {/* Legend Chips */}
+                      <div className="flex flex-wrap gap-2 text-[11px] pt-1">
+                        {pipelineData.mineralogy.classes.map((cls) => (
+                          <div key={cls.id} className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-neutral-900 border border-neutral-800">
+                            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: cls.color_hex }}></span>
+                            <span className="text-neutral-300">{cls.name.split(" ")[0]}</span>
+                            <span className="text-neutral-500 font-mono">({cls.coverage_pct}%)</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Coverage Breakdown Bars & Diagnostic Index Table */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                    {/* Coverage Breakdown */}
+                    <div className="bg-neutral-950/60 border border-neutral-800/80 rounded-xl p-4 space-y-3">
+                      <h3 className="text-xs font-bold text-neutral-200">Mineral Phase Distribution</h3>
+
+                      {/* Multi-segment stacked bar */}
+                      <div className="w-full h-3 rounded-full overflow-hidden flex bg-neutral-800">
+                        {pipelineData.mineralogy.classes.map((cls) => (
+                          <div
+                            key={cls.id}
+                            style={{ width: `${cls.coverage_pct}%`, backgroundColor: cls.color_hex }}
+                            title={`${cls.name}: ${cls.coverage_pct}%`}
+                          ></div>
+                        ))}
+                      </div>
+
+                      {/* Detailed Class List */}
+                      <div className="divide-y divide-neutral-800/60 text-xs">
+                        {pipelineData.mineralogy.classes.map((cls) => (
+                          <div key={cls.id} className="py-2 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: cls.color_hex }}></span>
+                              <span className="text-neutral-200 font-medium">{cls.name}</span>
+                            </div>
+                            <div className="flex items-center gap-4 font-mono text-neutral-400">
+                              <span>Depth: {(cls.mean_depth * 100).toFixed(1)}%</span>
+                              <span className="w-14 text-right text-neutral-200 font-bold">{cls.coverage_pct}%</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Diagnostic Absorption Indices Table */}
+                    <div className="bg-neutral-950/60 border border-neutral-800/80 rounded-xl p-4 space-y-3">
+                      <h3 className="text-xs font-bold text-neutral-200">Absorption Band Indices &amp; Parameters</h3>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead>
+                            <tr className="text-neutral-400 border-b border-neutral-800">
+                              <th className="py-1.5 px-2">Diagnostic Feature</th>
+                              <th className="py-1.5 px-2">Center</th>
+                              <th className="py-1.5 px-2">Depth</th>
+                              <th className="py-1.5 px-2">Area / Ratio</th>
+                              <th className="py-1.5 px-2">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-neutral-800/60 font-mono text-neutral-300">
+                            <tr>
+                              <td className="py-2 px-2 font-sans font-medium text-neutral-200">1 µm Mafic Silicate</td>
+                              <td className="py-2 px-2">{pipelineData.mineralogy.indices.band1_1um.center_nm ?? "—"} nm</td>
+                              <td className="py-2 px-2">{(pipelineData.mineralogy.indices.band1_1um.depth * 100).toFixed(1)}%</td>
+                              <td className="py-2 px-2">{pipelineData.mineralogy.indices.band1_1um.area} nm</td>
+                              <td className="py-2 px-2 text-emerald-400">Valid</td>
+                            </tr>
+                            <tr>
+                              <td className="py-2 px-2 font-sans font-medium text-neutral-200">2 µm Pyroxene / Spinel</td>
+                              <td className="py-2 px-2">{pipelineData.mineralogy.indices.band2_2um.center_nm ?? "—"} nm</td>
+                              <td className="py-2 px-2">{(pipelineData.mineralogy.indices.band2_2um.depth * 100).toFixed(1)}%</td>
+                              <td className="py-2 px-2">{pipelineData.mineralogy.indices.band2_2um.area} nm</td>
+                              <td className="py-2 px-2 text-emerald-400">Valid</td>
+                            </tr>
+                            <tr>
+                              <td className="py-2 px-2 font-sans font-medium text-neutral-200">Band Area Ratio (BAR)</td>
+                              <td className="py-2 px-2">—</td>
+                              <td className="py-2 px-2">—</td>
+                              <td className="py-2 px-2 text-amber-400 font-bold">{pipelineData.mineralogy.indices.band_area_ratio ?? "N/A"}</td>
+                              <td className="py-2 px-2 text-neutral-400">Area2/Area1</td>
+                            </tr>
+                            <tr>
+                              <td className="py-2 px-2 font-sans font-medium text-neutral-200">1.25 µm Plagioclase</td>
+                              <td className="py-2 px-2">{pipelineData.mineralogy.indices.plagioclase_1250nm.center_nm ?? "—"} nm</td>
+                              <td className="py-2 px-2">{(pipelineData.mineralogy.indices.plagioclase_1250nm.depth * 100).toFixed(1)}%</td>
+                              <td className="py-2 px-2">{pipelineData.mineralogy.indices.plagioclase_1250nm.area} nm</td>
+                              <td className="py-2 px-2 text-neutral-300">
+                                {pipelineData.mineralogy.indices.plagioclase_1250nm.valid ? "Fe²⁺ detected" : "Trace"}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td className="py-2 px-2 font-sans font-medium text-neutral-200">3 µm Hydration (H₂O/OH)</td>
+                              <td className="py-2 px-2">{pipelineData.mineralogy.indices.hydration_3um.center_nm ?? "—"}</td>
+                              <td className="py-2 px-2">
+                                {pipelineData.mineralogy.indices.hydration_3um.depth != null
+                                  ? `${(pipelineData.mineralogy.indices.hydration_3um.depth * 100).toFixed(1)}%`
+                                  : "—"}
+                              </td>
+                              <td className="py-2 px-2">—</td>
+                              <td className="py-2 px-2 text-amber-400">
+                                {pipelineData.mineralogy.indices.hydration_3um.status}
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Caveats Box */}
+                  {pipelineData.mineralogy.quality.warnings.length > 0 && (
+                    <div className="p-4 rounded-xl bg-amber-950/20 border border-amber-800/40 text-amber-300/90 text-xs space-y-1.5">
+                      <div className="font-semibold text-amber-200 flex items-center gap-1.5">
+                        <AlertTriangle className="h-4 w-4" />
+                        <span>Quality &amp; Processing Caveats:</span>
+                      </div>
+                      <ul className="list-disc list-inside space-y-1 text-neutral-300/80">
+                        {pipelineData.mineralogy.quality.warnings.map((warn, i) => (
+                          <li key={i}>{warn}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </section>
+              )}
             </div>
           )}
         </main>
@@ -656,7 +1213,7 @@ export default function App() {
                 </p>
               </div>
               <span className="text-xs px-2.5 py-1 rounded-lg bg-neutral-800 text-neutral-300 font-mono">
-                8 Decisions Recorded
+                9 Decisions Recorded
               </span>
             </div>
 
@@ -710,15 +1267,15 @@ export default function App() {
               {/* Decision 4 */}
               <div className="p-4 rounded-xl bg-neutral-950/60 border border-neutral-800/80 space-y-2">
                 <h3 className="text-amber-400 font-semibold text-base">
-                  4. Hyperspectral Cube Reduction: 1st Principal Component vs Uniform Band Averaging
+                  4. Hyperspectral Cube Reduction: 1st Principal Component vs Nearest ~1000 nm Band Selection
                 </h3>
                 <p>
                   <strong className="text-white">Decision Made: </strong>
-                  Extract the 1st Principal Component (explaining &gt;85% variance) or select Band 42 (~1000nm), solve the geometry once, and broadcast the transform across all 256 channels.
+                  Extract the 1st Principal Component (explaining &gt;85% variance) or dynamically compute the reference band closest to 1000 nm: at 16.85 nm sampling starting from 800 nm, 1000 nm corresponds to Band 12 (round((1000 - 800) / 16.85) = 12), rather than a static index. Solve geometry once and broadcast across all 256 channels.
                 </p>
                 <p className="text-xs text-neutral-400">
                   <strong className="text-red-400">What would happen if alternative was used: </strong>
-                  Uniform averaging washes out contrast and incorporates dead detector channels. Solving 256 separate transforms per band is 256× slower and introduces inter-band chromatic misregistration jitter.
+                  Uniform averaging washes out contrast and incorporates dead detector channels. Solving 256 separate transforms per band is 256× slower and introduces inter-band chromatic misregistration jitter. Hardcoding index 42 sampled at ~1507 nm instead of 1000 nm.
                 </p>
               </div>
 
@@ -781,6 +1338,22 @@ export default function App() {
                   A full-resolution OHRC strip is &gt;1.4 gigapixels. Live processing on stage causes 5-minute freeze times and container out-of-memory crashes.
                 </p>
               </div>
+
+              {/* Decision 9 */}
+              <div className="p-4 rounded-xl bg-neutral-950/60 border border-neutral-800/80 space-y-2">
+                <h3 className="text-amber-400 font-semibold text-base">
+                  9. Mineral Characterisation from IIRS: Diagnostic Band-Parameter Analysis vs Black-Box Classifier
+                </h3>
+                <p>
+                  <strong className="text-white">Decision Made: </strong>
+                  Physically grounded absorption band parameter analysis (`lunar_matcher/spectral/analysis.py`):
+                  straight-line shoulder continuum removal across standard diagnostic windows (1 µm, 1.25 µm, 2 µm, 3 µm), polynomial sub-band center derivation, absorption depth, and Band Area Ratio (BAR = Area 2µm / Area 1µm). Rule-based mineral classification is verified against laboratory reference libraries (RELAB / USGS) and gated strictly against thermal emission artifacts.
+                </p>
+                <p className="text-xs text-neutral-400">
+                  <strong className="text-red-400">What would happen if alternative was used: </strong>
+                  Deep black-box neural networks lack geochemical explainability; slight photometric variations, sensor vignetting, or uncorrected thermal emission tails (&gt;2.5 µm) cause them to hallucinate exotic minerals or misclassify high-Ca pyroxene as low-Ca pyroxene without diagnostic traceability. Unsupervised clustering groups pixels by surface albedo rather than crystal field absorption features.
+                </p>
+              </div>
             </div>
           </div>
         </main>
@@ -788,7 +1361,7 @@ export default function App() {
 
       {/* Footer */}
       <footer className="border-t border-neutral-800/80 py-4 px-6 text-center text-xs text-neutral-500">
-        Lunar Matcher · Chandrayaan-2 Planetary Data System Pipeline · ISRO / NASA Planetary Standards
+        Lunar Matcher · Chandrayaan-2 Planetary Data System Pipeline &amp; IIRS Spectral Mineralogy · ISRO / NASA Planetary Standards
       </footer>
     </div>
   );

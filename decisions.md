@@ -60,7 +60,7 @@ This document records the architectural and engineering decisions made in the de
 
 - **Decision Made**: Dual-mode reduction in `matching/band_select.py`:
   - Mode 1: PCA across the 256 spectral channels, extracting the 1st Principal Component (explaining >85% variance) with polarity alignment to ensure positive correlation with surface albedo.
-  - Mode 2: High-SNR single VNIR band selection (default Band 42 ~1000nm, avoiding absorption bands).
+  - Mode 2: High-SNR single VNIR band selection (computed dynamically from wavelength nearest to 1000nm: Band 12 at 16.85nm sampling from 800nm, avoiding absorption bands).
   - Solved geometric transform is then broadcast across all 256 bands in parallel chunks without per-band re-solving.
 - **Alternatives Considered**:
   - Averaging all 256 bands uniformly.
@@ -128,3 +128,23 @@ This document records the architectural and engineering decisions made in the de
   - A single full-resolution OHRC panchromatic strip is $\sim 12{,}000 \times 120{,}000$ pixels (several gigabytes uncompressed). Reading and reprojecting this on stage would take 5 to 10 minutes and exhaust memory, causing demo crashes.
 - **Why This Decision Was Made**:
   - Decouples heavy geospatial ingestion (run once offline) from interactive demo presentation (instant sub-second responses).
+
+---
+
+## 9. Mineral Characterisation from IIRS: Diagnostic Band-Parameter Analysis vs. Black-Box Neural Classifier
+
+- **Decision Made**: Physically grounded absorption band parameter analysis (`spectral/analysis.py`):
+  - Straight-line shoulder continuum removal across standard diagnostic windows (1 µm, 1.25 µm, 2 µm, 3 µm).
+  - Polynomial sub-band center derivation, absorption depth, and band area integration.
+  - Band Area Ratio (BAR = Area 2µm / Area 1µm) and rule-based mineral classification verified against laboratory reference libraries (RELAB / USGS).
+  - Explicit thermal correction gating on the 3 µm hydration band, refusing hydration quantification unless Level-2 thermal models are verified.
+- **Alternatives Considered**:
+  - End-to-end deep convolutional / vision-transformer hyperspectral classifier trained on terrestrial or synthetic scenes.
+  - Blind unsupervised k-means or t-SNE clustering on raw reflectance bands.
+- **What Would Happen If Alternative Was Used**:
+  - Deep black-box neural networks lack physical explainability; slight photometric variations, sensor vignetting, or uncorrected thermal emission tails (>2.5 µm) cause them to hallucinate exotic minerals or misclassify high-Ca pyroxene as low-Ca pyroxene without diagnostic traceability.
+  - Unsupervised clustering groups pixels by albedo and topographic shading rather than diagnostic crystal field absorption features, failing to differentiate anorthosite from bright shocked basalt.
+- **Why This Decision Was Made**:
+  - Crystal field theory dictates specific absorption band centers for mafic silicates (Fe²⁺ in M1/M2 pyroxene octahedral sites at ~930 nm vs ~1015 nm; olivine broad 3-peak composite at ~1050 nm; plagioclase ~1250 nm).
+  - Diagnostic band parameters (band centers, depths, and Band Area Ratios) provide transparent, auditable geochemical science directly comparable with peer-reviewed lunar sample analyses (Apollo/Luna/Chang'e) and NASA M³ findings.
+
